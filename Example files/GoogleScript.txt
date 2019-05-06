@@ -1,0 +1,276 @@
+// Created by Chris Nguyen, 2018
+// University of Wisconsin - Madison BME 201
+// Use this file with the ESP8266 library HTTPSRedirect
+//
+// Receives data from ESP8266 and adds it to the spreadsheet
+// Has a timer that will checks the last read temperature every hour on the hour and alerts the user if
+// the temperature is greater than tempThreshold
+// Has a timer that will check the size of the spreadsheet and will save data to a txt file and reduce the
+// the size of the spreadsheet by half if the data surpasses saveThreshold
+
+
+// Required set-up by user :
+// update the spreadsheet ID to specific spreadsheet
+// update first_row, saveThreshold, tempThreshold if desired
+
+var SS = SpreadsheetApp.openById('AAAAAAAAAAAAAAAAAAA'); //the Google Sheet ID
+
+var first_row = 5;                       //The first row of populating data
+var saveThreshold = 15000;               //The number of data points after which to save a text file, the program will preserve half of the data after saving
+var tempThreshold = 50;                  //Temperature at which the temperature alert email will trigger
+
+var sheet = SS.getSheets()[0];           //Accesses the first sheet on the page, do not change
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+
+
+/*
+ function createTimeDrivenTriggers
+ Creates time based triggers that will run the email alert (to avoid spam) and the spreadsheet saving and size reduction
+ */
+function createTimeDrivenTriggers() {
+	//Check for size threshold every day at 3am
+	ScriptApp.newTrigger('exportOnSizeThreshold')
+	.timeBased()
+	.everyDays(1)
+	.atHour(3)
+	.create();
+	
+	//Check for temperature every hour on the hour
+	ScriptApp.newTrigger('emailAlertOnTemperature')
+	.timeBased()
+	.everyHours(1)
+	.nearMinute(00)
+	.create();
+}
+
+function deleteTriggers() {
+  // Loop over all triggers.
+  var allTriggers = ScriptApp.getProjectTriggers();
+  for (var i = 0; i < allTriggers.length; i++) {
+      ScriptApp.deleteTrigger(allTriggers[i]);
+  }
+}
+
+/*
+ function onOpen
+ Called whenever user opens the spreadsheet. Adds a menu option to export the data by calling the function manualExport
+ */
+function onOpen(e) {
+	var ui = SpreadsheetApp.getUi();
+	ui.createMenu('BME 201')
+    .addItem('Activate Timed Triggers', 'createTimeDrivenTriggers')
+    .addItem('Deactivate Timed Triggers', 'deleteTriggers')
+	.addItem('Export data and clear', 'manualExport')
+	.addToUi();
+}
+
+/*
+ function manualExport
+ Saves the rest of the data and clears the spreadsheet
+ */
+function manualExport() {
+	saveRange2txt(first_row, sheet.getLastRow());
+	sheet.getRange(first_row, 1, sheet.getLastRow(), sheet.getLastColumn()).clearContent();
+}
+
+
+/*
+ function doPost
+ Responds to a POST HTTP request
+ Appends new data to the spreadsheet if request contains the correct data format (JSON)
+ */
+function doPost(e) {
+	var parsedData;
+	var str = "";
+	
+	try {
+		parsedData = JSON.parse(e.postData.contents);
+	}
+	catch(f){
+		return ContentService.createTextOutput("Error in parsing request body: " + f.message);
+	}
+	
+	if (parsedData !== undefined){
+		// Common items first
+		// data format: 0 = display value(literal), 1 = object value
+		var flag = parsedData.format;
+		
+		if (flag === undefined){
+			flag = 0;
+		}
+		
+		//Perform the appendRow if the command exists
+		switch (parsedData.command) {
+			case "appendRow":
+				var tmp = sheet;
+				var dataArr = parsedData.values.split(",");
+				var now = Utilities.formatDate(new Date(), "CST", "MM/dd/yyyy' 'HH:mm:ss");
+				
+				dataArr.unshift(now);
+				tmp.appendRow(dataArr);
+				
+				
+				str = "Success: " + now; //Prepare the message to say Success with a timestamp
+				SpreadsheetApp.flush(); //updates the spreadsheet
+				break;
+		}
+		
+		return ContentService.createTextOutput(str);
+	}
+	
+	else{
+		return ContentService.createTextOutput("Error. Request body empty or in incorrect format.");
+	}
+}
+
+/*
+ function doGet
+ Responds to a GET HTTP request
+ Returns the last saved data point with the update time
+ */
+function doGet(e){
+	var read = e.parameter.read;
+	
+	//Check to see that read is actually called
+	if (read !== undefined){
+		var lastRow = sheet.getLastRow();
+		return ContentService.createTextOutput("Last saved data--> \nValue: " + sheet.getRange(lastRow, 2).getValue() +" at " + sheet.getRange(lastRow, 1).getValue());
+	}
+	else{
+		return ContentService.createTextOutput("Error. Request body empty or in incorrect format.");
+	}
+}
+
+
+
+
+
+
+/*
+ function emailAlertOnTemperature
+ Sends an email notification to emails on the spreadsheet if the temperature exceeds a certain value
+ */
+function emailAlertOnTemperature() {
+	var latestRow = 4;  //row 4 (latest temperature)
+	var latestCol = 2;  //col B (latest temperature)
+	var emailRow = 1;   //row 1 (email addresses)
+	var emailCol = 2;   //col B (email addresses)
+	
+	// Fetch the data for latest Temperature
+	var latestTemperature = sheet.getRange(latestRow, latestCol).getValues();
+	
+	//if the latest temperature recorded is greater than the max temperature, send email
+	if (latestTemperature >= tempThreshold){
+		var emailAddress = sheet.getRange(emailRow, emailCol).getValue();
+		var message = "Your bioreactor is overheating! The last recorded temperature was "+ latestTemperature.toString() +" degrees. Please attend to this as soon as possible. \n\nPlease do not reply to this message - this email address is not monitored. This email was automatically generated by a BME 201 Google Script.";
+		var subject = "ATTENTION REQUIRED: BME 201 Bioreactor overheating";
+		MailApp.sendEmail(emailAddress, subject, message);
+	}
+}
+
+/*
+ function exportOnSizeThreshold
+ Saves the data and reduces the size of the spreadsheet
+ */
+function exportOnSizeThreshold(){
+	var threshold = saveThreshold;
+	var lastRow = sheet.getLastRow();
+	
+	//if the size of the sheet has surpassed the threshold, save the part of the data to a txt file and reduce the size
+	if(lastRow >= threshold){
+		saveRange2txt(first_row, Math.floor(lastRow+first_row/2));
+		shiftRows(Math.floor((lastRow+first_row)/2));
+	}
+}
+
+/*
+ function save2txt
+ Saves the data to a txt file as a backup
+ Returns true if successful
+ */
+function saveRange2txt(firstrow, lastrow) {
+	var fldr = DriveApp.getFileById(SS.getId()).getParents().next();   //Get a reference to the folder
+	var fileName = SS.getName() + '.txt';         //Assign the name of the file to get to a variable
+	
+	//Converts the content to text
+	var txtFile = convertRangeToTxtFile_(firstrow, lastrow);
+	
+	//Get all files by that name
+	var allFilesInFolder = fldr.getFilesByName(fileName);
+	
+	//If no file is found, create a new file
+	if (allFilesInFolder.hasNext() === false) {
+		fldr.createFile(fileName, txtFile);
+		//Logger.log("New file created");
+		return true;
+	};
+	
+	//Even if it's only one file, must iterate a while loop in order to access the file.
+	//Google drive will allow multiple files of the same name.
+	while (allFilesInFolder.hasNext()) {
+		//get the old file and the content
+		var dataFile = allFilesInFolder.next();
+		var oldContent = dataFile.getAs('text/plain').getDataAsString();
+		
+		//update the file with new content
+		dataFile.setContent(oldContent + txtFile);
+		//Logger.log("Updated File");
+		return true;
+	}
+}
+
+
+/*
+ function convertRangeToTxtFile
+ Converts the data in the spreadsheet into a string for the txt file
+ Returns the string
+ */
+function convertRangeToTxtFile_(row_to_start, row_to_end) {
+	try {
+		var txtFile = "";
+		var data = sheet.getDataRange().getDisplayValues();
+		
+		// Loop through the data in the range and build a string with the data
+		if (data.length > 1) {
+			//go through the rows of data
+			for (var row = row_to_start-1; row <= row_to_end-1; row++) {
+				txtFile += data[row]; //adds the row
+				txtFile += "\n";  //adds a new line character to create a line break
+			}
+		}
+		return txtFile; //returns the data in text format or 'No data' if there is no data
+	}
+	
+	catch(err) {
+		Logger.log(err);
+	}
+}
+
+/*
+ function shiftRows
+ Prevents overflow of data by shifting a chunk of data upwards, overwriting what originally was there
+ */
+function shiftRows(firstRowToKeep){
+	var lastRow = sheet.getLastRow();
+	var numRows = lastRow-firstRowToKeep+1;
+	var numCols = sheet.getLastColumn();
+	
+	//Error if trying to shift empty cells
+	if (lastRow < firstRowToKeep){
+		Logger.log("Tried to shift rows with no content");
+		return;
+	}
+	
+	//Finds the data to shift upwards and shifts it
+	var dataToKeep = sheet.getRange(firstRowToKeep, 1, numRows, numCols);
+	dataToKeep.moveTo(sheet.getRange(first_row,1));
+	
+	//validate that there is no more data beneath the newly shifted data
+	lastRow = sheet.getLastRow();
+	var dataToClear = sheet.getRange(dataToKeep.getNumRows()+first_row, 1, lastRow,numCols);
+	dataToClear.clearContent();
+}
+
