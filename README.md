@@ -5,7 +5,7 @@ This content was created by Chris Nguyen for BME 201 at University of Wisconsin 
 
 The files presented here can be easily modified to fit your needs. The provided sample code for the ESP8266 simply reads data in via the Serial interface and sends that data to Google. Server-side calculations and actions are performed within a Google Script (javascript like code that lives on the Google Server). 
 
-An Arduino is not required - all circuitry can be completed on-board the NodeMCU. An Arduino was used for this class in order to have access to 5V
+An Arduino is not required - all circuitry can be completed on-board the NodeMCU. An Arduino was used for this class in order to have access to 5V logic rails.
 
 ## Instructions
 - Instructions on how to set up a Google Sheet to log data can be found in How_to_set-up_Google_Sheets.pdf
